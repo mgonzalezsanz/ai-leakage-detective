@@ -1,0 +1,9 @@
+# Ignore prompts file
+prompts.md
+.venv/
+.env
+__pycache__/
+*.pyc
+.langgraph_api/
+.playwright-mcp/
+data/sandbox/

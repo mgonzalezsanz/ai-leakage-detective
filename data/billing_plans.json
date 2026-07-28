@@ -1,0 +1,44 @@
+[
+    {
+      "plan_id": "C-1001",
+      "customer_name": "ACME Corp",
+      "total_value": 96000,
+      "currency": "USD",
+      "cadence": "Monthly",
+      "start_date": "2025-01-01",
+      "entitlements": ["Analytics", "Support"],
+      "notes": "12-month SaaS; expected ~8000 USD per month."
+    },
+    {
+      "plan_id": "C-1007",
+      "customer_name": "Globex Ltd",
+      "total_value": 90000,
+      "currency": "USD",
+      "cadence": "Quarterly",
+      "start_date": "2025-03-01",
+      "entitlements": ["Analytics", "Premium Support"],
+      "notes": "Initial renewal term; superseded by C-1007-A1 from 2025-07-01 (see amendment)."
+    },
+    {
+      "plan_id": "C-1007-A1",
+      "customer_name": "Globex Ltd",
+      "total_value": 100000,
+      "currency": "USD",
+      "cadence": "Quarterly",
+      "start_date": "2025-07-01",
+      "amends": "C-1007",
+      "entitlements": ["Analytics", "Premium Support"],
+      "notes": "Amendment effective 2025-07-01. Quarterly target now 25000 USD."
+    },
+    {
+      "plan_id": "C-1010",
+      "customer_name": "Initech",
+      "total_value": 120000,
+      "currency": "USD",
+      "cadence": "Annual",
+      "start_date": "2025-01-15",
+      "entitlements": ["Analytics", "Consulting"],
+      "notes": "Enterprise annual. Watch for entitlement coverage ('Analytics')."
+    }
+  ]
+  

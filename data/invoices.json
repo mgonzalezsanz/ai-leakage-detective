@@ -1,0 +1,16 @@
+[
+    {"invoice_id":"I-9001","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-01-05","due_date":"2025-01-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9002","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-02-05","due_date":"2025-02-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9003","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-03-05","due_date":"2025-03-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9004","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-04-05","due_date":"2025-04-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9005","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-05-05","due_date":"2025-05-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9006","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-06-05","due_date":"2025-06-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9007","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-07-05","due_date":"2025-07-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9008","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-08-05","due_date":"2025-08-20","amount_invoiced":8000,"currency":"USD","status":"paid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9010","plan_id":"C-1001","customer_name":"ACME Corp","issue_date":"2025-10-05","due_date":"2025-10-20","amount_invoiced":8000,"currency":"USD","status":"unpaid","description":"Monthly Analytics subscription"},
+    {"invoice_id":"I-9110","plan_id":"C-1007","customer_name":"Globex Ltd","issue_date":"2025-06-10","due_date":"2025-06-30","amount_invoiced":20000,"currency":"USD","status":"paid","description":"Quarterly Analytics subscription"},
+    {"invoice_id":"I-9123","plan_id":"C-1007-A1","customer_name":"Globex Ltd","issue_date":"2025-09-12","due_date":"2025-09-30","amount_invoiced":25000,"currency":"EUR","status":"paid","description":"Quarterly Analytics subscription"},
+    {"invoice_id":"I-9201","plan_id":"C-1010","customer_name":"Initech","issue_date":"2025-01-20","due_date":"2025-02-15","amount_invoiced":100000,"currency":"USD","status":"paid","description":"Annual base plan"},
+    {"invoice_id":"I-9202","plan_id":"","customer_name":"Globex Ltd","issue_date":"2025-12-10","due_date":"2025-12-30","amount_invoiced":15000,"currency":"USD","status":"paid","description":"Orphan renewal payment (no contract reference)"}
+  ]
+  

@@ -1,0 +1,12 @@
+[
+    {
+      "memo_id": "M-300",
+      "plan_id": "C-1007-A1",
+      "invoice_id": "I-9123",
+      "amount": 2000,
+      "currency": "USD",
+      "issue_date": "2025-09-20",
+      "reason": "FX overbilling adjustment (EUR→USD)"
+    }
+  ]
+  
