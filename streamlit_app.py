@@ -9,6 +9,7 @@ from pathlib import Path
 import streamlit as st
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
+from phoenix.otel import using_session
 
 from agent.graph import build_graph
 
@@ -76,12 +77,15 @@ if pending_interrupt:
     st.info(f"**Approval needed** - apply this action?\n\n```json\n{json.dumps(draft, indent=2)}\n```")
     col1, col2 = st.columns(2)
     if col1.button("✅ Approve", type="primary"):
-        graph.invoke(Command(resume="approve"), config=config)
+        with using_session(st.session_state.thread_id):
+            graph.invoke(Command(resume="approve"), config=config)
         st.rerun()
     if col2.button("❌ Reject"):
-        graph.invoke(Command(resume="reject"), config=config)
+        with using_session(st.session_state.thread_id):
+            graph.invoke(Command(resume="reject"), config=config)
         st.rerun()
 else:
     if user_input := st.chat_input("Ask about a plan, invoice, or discrepancy..."):
-        graph.invoke({"messages": [{"role": "user", "content": user_input}]}, config=config)
+        with using_session(st.session_state.thread_id):
+            graph.invoke({"messages": [{"role": "user", "content": user_input}]}, config=config)
         st.rerun()

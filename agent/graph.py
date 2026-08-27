@@ -1,5 +1,5 @@
 """Revenue Leakage Agent graph: a ReAct agent whose apply() tool is gated by
-a real LangGraph interrupt() so nothing writes to the sandbox without an
+a LangGraph interrupt() so nothing writes to the sandbox without an
 explicit human resume."""
 
 from dotenv import load_dotenv
@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import interrupt
 
+from agent.observability import setup_tracing
 from agent.tools import (
     apply_impl,
     fx_convert,
@@ -21,6 +22,7 @@ from agent.tools import (
 )
 
 load_dotenv()
+setup_tracing()
 
 
 @tool
