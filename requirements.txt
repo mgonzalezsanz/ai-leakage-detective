@@ -5,3 +5,5 @@ python-dotenv==1.2.3
 streamlit==1.62.0
 arize-phoenix==20.3.0
 openinference-instrumentation-langchain==0.1.72
+sentence-transformers==6.0.0
+faiss-cpu==1.15.0

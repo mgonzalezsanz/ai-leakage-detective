@@ -19,6 +19,7 @@ from agent.tools import (
     query_credit_memos,
     query_invoices,
     rollback,
+    search_knowledge_base,
 )
 
 load_dotenv()
@@ -42,6 +43,7 @@ TOOLS = [
     query_invoices,
     query_credit_memos,
     fx_convert,
+    search_knowledge_base,
     propose_make_good_invoice,
     propose_credit_memo,
     propose_plan_amendment,
@@ -63,6 +65,12 @@ arithmetic, e.g. "25000 EUR x 1.08 = 27000 USD vs 25000 USD expected -> \
 $2000 overbilled".
 - If a plan has an amendment_chain, mention which version is in effect and \
 since when.
+- Before proposing a fix, or whenever something about the situation is \
+unusual (an orphan record, a high-value discrepancy, a customer you don't \
+have context on), call search_knowledge_base for relevant policy or \
+account-specific notes - cite the specific document if it changes your \
+recommendation, e.g. an escalation threshold or an account-specific \
+override.
 - Before proposing a credit memo, or whenever discussing a possible \
 overbilling issue, call query_credit_memos for the relevant plan_id/invoice_id \
 - if a credit memo already covers it, explain that it's already resolved \

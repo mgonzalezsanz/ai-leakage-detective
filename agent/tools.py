@@ -8,6 +8,8 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from agent.knowledge_base import search as _search_knowledge_base
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 SANDBOX_DIR = DATA_DIR / "sandbox"
 ACTIONS_FILE = SANDBOX_DIR / "actions.json"
@@ -123,6 +125,16 @@ def fx_convert(amount: float, from_ccy: str, to_ccy: str, on_date: str) -> dict:
                 "rate_date": r["date"],
             }
     return {"error": f"no exchange rate available for {from_ccy}->{to_ccy}"}
+
+
+@tool
+def search_knowledge_base(query: str, k: int = 3) -> list[dict]:
+    """Search internal policy documents and account notes (approval
+    thresholds, FX/credit-memo/amendment policy, account-specific handling,
+    known issues) for guidance relevant to the current investigation. Always
+    cite the specific document (source) if it changes your recommendation -
+    e.g. an escalation threshold or an account-specific override."""
+    return _search_knowledge_base(query, k=k)
 
 
 @tool
