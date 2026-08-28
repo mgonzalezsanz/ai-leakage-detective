@@ -105,7 +105,7 @@ See the [blog post](https://killosmind.com/2026/08/27/ai-agent-observability-eva
 ## Getting started
 
 ```bash
-git clone https://github.com/mmmgggsss/ai-leakage-detective.git
+git clone https://github.com/mgonzalezsanz/ai-leakage-detective.git
 cd ai-leakage-detective
 python -m venv .venv && source .venv/bin/activate   # macOS/Linux
 python -m venv .venv && .venv\Scripts\activate       # Windows
