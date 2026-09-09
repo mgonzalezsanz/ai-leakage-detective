@@ -58,6 +58,40 @@ Notice how the agent maintains context about plan P-12345 throughout, answers fo
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    User(["User"]) <-->|"message / approve / reject"| UI["Streamlit chat UI<br/>(or LangGraph Studio)"]
+
+    subgraph Graph["LangGraph ReAct agent (agent/graph.py)"]
+        direction TB
+        LLM["LLM reasoning step<br/>ChatAnthropic, claude-sonnet-4-5"]
+        Tools{{"Tool node"}}
+        LLM -->|"tool call"| Tools
+        Tools -->|"observation"| LLM
+    end
+
+    UI <--> LLM
+    LLM <-->|"state persist / load"| Checkpointer[("Checkpointer<br/>per-thread conversation state<br/>enables follow-ups and interrupt resume")]
+
+    Tools --> ReadOnly["Read-only lookups<br/>load_plan, query_invoices,<br/>query_credit_memos, fx_convert"]
+    Tools --> RAG["search_knowledge_base"]
+    Tools --> Propose["Drafting tools, no writes<br/>propose_make_good_invoice,<br/>propose_credit_memo, propose_plan_amendment"]
+    Tools --> Apply["apply(draft)"]
+    Tools --> Rollback["rollback()"]
+
+    ReadOnly --> Fixtures[("data/*.json<br/>billing plans, invoices,<br/>credit memos, exchange rates")]
+    RAG --> KB["agent/knowledge_base.py<br/>MiniLM embeddings + FAISS index"]
+    KB --> KBDocs[("data/knowledge_base/*.md<br/>policy docs, account notes")]
+
+    Apply -->|"interrupt(), graph pauses"| Gate{"Human approval"}
+    Gate -->|"reject"| Tools
+    Gate -->|"approve"| Sandbox[("data/sandbox/<br/>actions.json + audit_log.json")]
+    Rollback --> Sandbox
+    Sandbox --> Tools
+
+    Tools -.->|"OTel spans<br/>(every LLM call + tool invocation)"| Phoenix["Arize Phoenix<br/>live tracing + offline eval harness"]
+```
+
 - [`agent/tools.py`](agent/tools.py) — read-only lookups (`load_plan`, `query_invoices`, `query_credit_memos`, `fx_convert`) and side-effect-free `propose_*` drafting tools; `apply_impl`/`rollback` are the only functions that touch the sandbox ledger.
 - [`agent/graph.py`](agent/graph.py) — compiles a LangGraph `create_react_agent` over those tools, plus a wrapped `apply()` tool that calls `interrupt()` before writing anything, so the graph pauses until a human resumes with `"approve"` or `"reject"`.
 - [`agent/knowledge_base.py`](agent/knowledge_base.py) — a small local RAG layer: sentence-transformer embeddings + a FAISS index over `data/knowledge_base`, searched via the `search_knowledge_base` tool for policy/account-specific context an investigation might need.
