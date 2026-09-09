@@ -60,7 +60,7 @@ Notice how the agent maintains context about plan P-12345 throughout, answers fo
 
 ```mermaid
 flowchart TD
-    User(["User"]) <-->|"message / approve / reject"| UI["Streamlit chat UI<br/>(or LangGraph Studio)"]
+    User(["User"]) <-->|"message / approve / reject"| UI["FastAPI + htmx chat UI<br/>(or LangGraph Studio)"]
 
     subgraph Graph["LangGraph ReAct agent (agent/graph.py)"]
         direction TB
@@ -102,7 +102,7 @@ flowchart TD
 - [`agent/web_search.py`](agent/web_search.py) — a real web search fallback via the Tavily API (a plain `httpx` call, no SDK), used via the `search_web` tool when internal retrieval comes back low-confidence or empty.
 - [`agent/observability.py`](agent/observability.py) — wires OpenTelemetry tracing to a local Arize Phoenix collector and auto-instruments every LLM call and tool invocation.
 - [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: eight scenarios run end-to-end through the real agent, graded by nine evaluators (three deterministic, six LLM-judged, including RAG-specific retrieval-relevance/faithfulness checks and a source-disclosure check for the web-fallback path).
-- [`streamlit_app.py`](streamlit_app.py) — a minimal chat UI on top of the same compiled graph, with an approve/reject control for pending actions, a live audit-log viewer, and colored badges showing each retrieval result's confidence/source type.
+- [`ui/`](ui/) — a FastAPI + Jinja2 + [htmx](https://htmx.org) chat UI on top of the same compiled graph: a background thread runs each turn while the browser polls for updates, an approve/reject card handles pending actions, a slide-over panel shows the live audit log, and colored badges surface each retrieval result's confidence/source type.
 
 ## Data (`/data`)
 
@@ -166,7 +166,7 @@ phoenix serve   # UI at http://localhost:6006
 Then run the chat UI:
 
 ```bash
-streamlit run streamlit_app.py
+python -m ui.app   # UI at http://localhost:8000
 ```
 
 ...or open the graph in LangGraph Studio instead:
@@ -179,6 +179,7 @@ Run the plain assert-based unit checks:
 
 ```bash
 python -m agent.checks
+python -m ui.checks
 ```
 
 Run the full Phoenix eval suite (requires Phoenix running):
@@ -198,7 +199,12 @@ agent/
   observability.py     # Phoenix/OTel tracing setup
   evals.py             # Phoenix dataset + experiment harness
   checks.py            # plain assert-based unit checks
-data/                   # fixture data + writable sandbox ledger
-streamlit_app.py        # chat UI
-langgraph.json          # LangGraph Studio config
+ui/
+  app.py                # FastAPI app: routes, background-thread turn execution
+  rendering.py          # normalize_messages(), classify_badge() — pure functions
+  checks.py             # plain assert-based unit checks for rendering.py
+  templates/             # Jinja2 + htmx chat UI
+  static/                 # style.css
+data/                     # fixture data + writable sandbox ledger
+langgraph.json            # LangGraph Studio config
 ```

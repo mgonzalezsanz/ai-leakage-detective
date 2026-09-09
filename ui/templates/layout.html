@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Revenue Leakage Agent{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script>
+    function scrollThreadToBottom() {
+      const thread = document.querySelector('.thread');
+      if (thread) thread.scrollTop = thread.scrollHeight;
+    }
+
+    function toggleAuditDrawer() {
+      document.querySelector('.audit-drawer')?.classList.toggle('open');
+    }
+
+    document.addEventListener('keydown', e => {
+      if ((e.key === 'Enter' || e.key === 'Return') && !e.shiftKey && e.target.tagName === 'TEXTAREA') {
+        const form = e.target.closest('.chat-form');
+        if (form && !e.target.disabled) {
+          e.preventDefault();
+          form.requestSubmit();
+        }
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', scrollThreadToBottom);
+
+    // The 1s poll swaps only #turn-tail, so leave scroll alone then; scroll
+    // on the one-time full #turn swap when a run finishes and a message lands.
+    document.addEventListener('htmx:afterSettle', e => {
+      if (e.detail.target && e.detail.target.id !== 'turn-tail') scrollThreadToBottom();
+    });
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Revenue Leakage Agent</a>
+    <div class="topbar-actions">
+      {% if audit_log is defined %}
+      <button type="button" class="audit-toggle" onclick="toggleAuditDrawer()">
+        Audit log{% if audit_log %} ({{ audit_log | length }}){% endif %}
+      </button>
+      {% endif %}
+      <a class="new-conv" href="/">+ New conversation</a>
+    </div>
+  </header>
+
+  {% if audit_log is defined %}
+  <aside class="audit-drawer">
+    <div class="audit-drawer-header">
+      <h2>Sandbox audit log</h2>
+      <button type="button" class="audit-close" onclick="toggleAuditDrawer()">×</button>
+    </div>
+    {% if audit_log %}
+    <ul class="audit-list">
+      {% for e in audit_log %}
+      <li class="audit-entry audit-{{ e.event }}">
+        <div class="audit-entry-head">
+          <span class="audit-icon">{% if e.event == "applied" %}✓{% else %}↺{% endif %}</span>
+          <span class="audit-label">{{ e.label }}</span>
+          {% if e.amount %}<span class="audit-amount">{{ e.amount }}</span>{% endif %}
+        </div>
+        <div class="audit-entry-meta">
+          {% if e.ref %}<span class="audit-ref">{{ e.ref }}</span>{% endif %}
+          <span class="audit-event-tag">{{ e.event | replace("_", " ") }}</span>
+          <span class="audit-when">{{ e.when }}</span>
+        </div>
+        {% if e.reason %}<p class="audit-reason">{{ e.reason }}</p>{% endif %}
+        <details class="audit-raw">
+          <summary>raw</summary>
+          <pre>{{ e.raw }}</pre>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No actions applied yet.</p>
+    {% endif %}
+  </aside>
+  {% endif %}
+
+  <main class="main">
+    {% block main %}{% endblock %}
+  </main>
+</body>
+</html>

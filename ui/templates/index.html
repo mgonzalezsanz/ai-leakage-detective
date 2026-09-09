@@ -1,0 +1,22 @@
+{% extends "layout.html" %}
+
+{% block main %}
+<div class="card">
+  <div class="index-header">
+    <h1>Investigate a plan or invoice</h1>
+    <p class="subtitle">
+      Ask about billing plan vs. invoice discrepancies. Nothing is written to the
+      sandbox without your approval.
+    </p>
+  </div>
+
+  <form method="post" action="/conversations" class="index-form chat-form">
+    <textarea
+      name="message"
+      placeholder="e.g. Investigate plan C-1001 and tell me if there's a billing discrepancy."
+      required
+    ></textarea>
+    <button type="submit">Investigate</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+<div id="turn">
+  <div class="thread">
+    {%- for m in messages %}
+    {%- if m.role == "user" %}
+    <div class="msg msg-user">{{ m.text }}</div>
+    {%- else %}
+    <div class="msg msg-agent">
+      {%- if m.text %}
+      <div class="msg-text">{{ m.text | markdown | safe }}</div>
+      {%- endif %}
+      {%- for tc in m.tool_calls %}
+      {%- for badge in tc.badges %}
+      <div class="badge badge-{{ badge.kind }}">
+        <span class="badge-icon">{{ badge.icon }}</span>
+        <span class="badge-label">{{ badge.label }}</span>
+        <span class="badge-score">{{ "%.2f"|format(badge.score) }}</span>
+        {%- if badge.detail %}<span class="badge-detail">{{ badge.detail }}</span>{% endif %}
+      </div>
+      {%- endfor %}
+      <details class="tool-call">
+        <summary>🔍 {{ tc.name }}({{ tc.args }})</summary>
+        <pre><code>{{ tc.raw if tc.raw is not none else "(pending)" }}</code></pre>
+      </details>
+      {%- endfor %}
+    </div>
+    {%- endif %}
+    {%- endfor %}
+  </div>
+
+  {% include "turn_tail.html" %}
+</div>

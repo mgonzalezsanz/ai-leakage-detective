@@ -1,0 +1,35 @@
+<div id="turn-tail"{% if running %} hx-get="/conversations/{{ conv_id }}" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  {% if log or running %}
+  <ul class="log">
+    {% for entry in log %}
+    <li><span class="node">{{ entry.node }}</span></li>
+    {% endfor %}
+    {% if running %}<li class="pending">thinking…</li>{% endif %}
+  </ul>
+  {% endif %}
+
+  {% if error %}
+  <p class="error">⚠️ {{ error }}</p>
+  {% endif %}
+
+  {% if pending_interrupt %}
+  <div class="approval-card">
+    <p class="approval-title">Approval needed — apply this action?</p>
+    <pre><code>{{ pending_interrupt | tojson(indent=2) }}</code></pre>
+    <form method="post" action="/conversations/{{ conv_id }}/resume" class="approval-actions">
+      <button type="submit" name="decision" value="approve" class="approve">✅ Approve</button>
+      <button type="submit" name="decision" value="reject" class="reject">❌ Reject</button>
+    </form>
+  </div>
+  {% else %}
+  <form method="post" action="/conversations/{{ conv_id }}/messages" class="reply chat-form">
+    <textarea
+      name="message"
+      placeholder="Ask a follow-up…"
+      required
+      {% if running %}disabled{% endif %}
+    ></textarea>
+    <button type="submit" {% if running %}disabled{% endif %}>Send</button>
+  </form>
+  {% endif %}
+</div>
