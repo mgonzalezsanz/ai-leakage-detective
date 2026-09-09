@@ -74,7 +74,8 @@ flowchart TD
     LLM <-->|"state persist / load"| Checkpointer[("Checkpointer<br/>per-thread conversation state<br/>enables follow-ups and interrupt resume")]
 
     Tools --> ReadOnly["Read-only lookups<br/>load_plan, query_invoices,<br/>query_credit_memos, fx_convert"]
-    Tools --> RAG["search_knowledge_base"]
+    Tools --> RAG["search_knowledge_base<br/>(confidence: high/low)"]
+    Tools --> Web["search_web<br/>(fallback tool)"]
     Tools --> Propose["Drafting tools, no writes<br/>propose_make_good_invoice,<br/>propose_credit_memo, propose_plan_amendment"]
     Tools --> Apply["apply(draft)"]
     Tools --> Rollback["rollback()"]
@@ -82,6 +83,9 @@ flowchart TD
     ReadOnly --> Fixtures[("data/*.json<br/>billing plans, invoices,<br/>credit memos, exchange rates")]
     RAG --> KB["agent/knowledge_base.py<br/>MiniLM embeddings + FAISS index"]
     KB --> KBDocs[("data/knowledge_base/*.md<br/>policy docs, account notes")]
+    RAG -.->|"low confidence"| Web
+    Web --> WebSearch["agent/web_search.py"]
+    WebSearch --> Tavily[("Tavily API<br/>(external web search)")]
 
     Apply -->|"interrupt(), graph pauses"| Gate{"Human approval"}
     Gate -->|"reject"| Tools
@@ -94,10 +98,11 @@ flowchart TD
 
 - [`agent/tools.py`](agent/tools.py) — read-only lookups (`load_plan`, `query_invoices`, `query_credit_memos`, `fx_convert`) and side-effect-free `propose_*` drafting tools; `apply_impl`/`rollback` are the only functions that touch the sandbox ledger.
 - [`agent/graph.py`](agent/graph.py) — compiles a LangGraph `create_react_agent` over those tools, plus a wrapped `apply()` tool that calls `interrupt()` before writing anything, so the graph pauses until a human resumes with `"approve"` or `"reject"`.
-- [`agent/knowledge_base.py`](agent/knowledge_base.py) — a small local RAG layer: sentence-transformer embeddings + a FAISS index over `data/knowledge_base`, searched via the `search_knowledge_base` tool for policy/account-specific context an investigation might need.
+- [`agent/knowledge_base.py`](agent/knowledge_base.py) — a small local RAG layer: sentence-transformer embeddings + a FAISS index over `data/knowledge_base`, searched via the `search_knowledge_base` tool. Each result carries a similarity score and a `confidence` label ("high"/"low", vs. a configurable threshold).
+- [`agent/web_search.py`](agent/web_search.py) — a real web search fallback via the Tavily API (a plain `httpx` call, no SDK), used via the `search_web` tool when internal retrieval comes back low-confidence or empty.
 - [`agent/observability.py`](agent/observability.py) — wires OpenTelemetry tracing to a local Arize Phoenix collector and auto-instruments every LLM call and tool invocation.
-- [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: seven scenarios run end-to-end through the real agent, graded by eight evaluators (three deterministic, five LLM-judged, including RAG-specific retrieval-relevance and faithfulness checks).
-- [`streamlit_app.py`](streamlit_app.py) — a minimal chat UI on top of the same compiled graph, with an approve/reject control for pending actions and a live audit-log viewer.
+- [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: eight scenarios run end-to-end through the real agent, graded by nine evaluators (three deterministic, six LLM-judged, including RAG-specific retrieval-relevance/faithfulness checks and a source-disclosure check for the web-fallback path).
+- [`streamlit_app.py`](streamlit_app.py) — a minimal chat UI on top of the same compiled graph, with an approve/reject control for pending actions, a live audit-log viewer, and colored badges showing each retrieval result's confidence/source type.
 
 ## Data (`/data`)
 
@@ -118,7 +123,8 @@ flowchart TD
 | `query_invoices(...)` | Filter invoices by plan, customer, date range |
 | `query_credit_memos(...)` | Filter existing credit memos |
 | `fx_convert(amount, from_ccy, to_ccy, on_date)` | Currency conversion using dated FX rates |
-| `search_knowledge_base(query, k=3)` | Semantic search over internal policy docs and account notes (RAG, local embeddings) |
+| `search_knowledge_base(query, k=3)` | Semantic search over internal policy docs and account notes (RAG, local embeddings); each result includes a similarity score and a confidence label |
+| `search_web(query, k=3)` | Real web search fallback (Tavily) for when internal retrieval is low-confidence or empty |
 | `propose_make_good_invoice(...)` | Draft a new invoice (no write) |
 | `propose_credit_memo(...)` | Draft a credit memo (no write) |
 | `propose_plan_amendment(...)` | Draft a plan update (no write) |
@@ -129,10 +135,10 @@ flowchart TD
 
 Every LLM call and tool invocation is traced via OpenTelemetry into [Arize Phoenix](https://github.com/Arize-ai/phoenix), so a full conversation shows up as one session with every reasoning step, tool call, and result inspectable in the Phoenix UI.
 
-On top of that, [`agent/evals.py`](agent/evals.py) defines a small regression suite: seven scenarios (missing invoice, already-resolved via credit memo, orphan invoice, amendment chain, approve-and-apply, reject-and-don't-apply, and a policy-aware escalation case) run end-to-end through the real agent — including the human-approval interrupt — and are graded by:
+On top of that, [`agent/evals.py`](agent/evals.py) defines a small regression suite: eight scenarios (missing invoice, already-resolved via credit memo, orphan invoice, amendment chain, approve-and-apply, reject-and-don't-apply, a policy-aware escalation case, and a low-confidence-to-web-fallback case) run end-to-end through the real agent — including the human-approval interrupt, and with the web search mocked so the suite stays offline/deterministic — and are graded by:
 
 - **Deterministic checks** — the right tools were called, the right dollar figure was cited, the sandbox ended up in the expected state (written on approval, untouched on rejection)
-- **LLM-judged checks** — the answer matches the expected finding, the agent never called `apply()` without explicit confirmation, it didn't hallucinate facts not in the data, and — when `search_knowledge_base` was consulted — the retrieved policy/notes were actually relevant and the answer stayed faithful to them rather than inventing policy details
+- **LLM-judged checks** — the answer matches the expected finding, the agent never called `apply()` without explicit confirmation, it didn't hallucinate facts not in the data, retrieved content (internal or web) was actually relevant and the answer stayed faithful to it, and — whenever retrieval was used — the answer correctly disclosed whether it was grounded in internal policy or a web result
 
 See the [blog post](https://killosmind.com/2026/08/27/ai-agent-observability-evaluation-arize-phoenix/) for a full walkthrough of how this is wired up and why.
 
@@ -148,6 +154,8 @@ cp .env.example .env   # add your ANTHROPIC_API_KEY
 ```
 
 The first call to `search_knowledge_base` downloads its embedding model (`all-MiniLM-L6-v2`, ~90MB, one-time, cached locally afterward) — the first investigation in a fresh clone will be slower than the rest.
+
+`search_web` needs a [Tavily](https://tavily.com) API key (`TAVILY_API_KEY` in `.env`) to actually reach the web — without one it degrades gracefully to an `{"error": ...}` result instead of crashing. `KB_CONFIDENCE_THRESHOLD` (default `0.40`) controls how low a similarity score has to be before the agent is told to stop trusting an internal match and fall back to `search_web`.
 
 Start Phoenix in its own terminal (tracing/evals no-op silently if it isn't running):
 
@@ -186,6 +194,7 @@ agent/
   tools.py             # read-only lookups, propose_* drafting tools, apply/rollback
   graph.py             # LangGraph ReAct agent + interrupt()-gated apply()
   knowledge_base.py    # local RAG: sentence-transformer embeddings + FAISS
+  web_search.py        # Tavily web search fallback (httpx, no SDK)
   observability.py     # Phoenix/OTel tracing setup
   evals.py             # Phoenix dataset + experiment harness
   checks.py            # plain assert-based unit checks
