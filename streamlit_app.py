@@ -48,6 +48,31 @@ with st.sidebar:
         st.caption("No actions applied yet.")
 
 
+def _render_retrieval_badges(raw_content: str | None) -> None:
+    """Surface each retrieved item's source type (internal vs. web fallback)
+    and confidence/score as a badge, above the raw JSON dump."""
+    if not raw_content:
+        return
+    try:
+        results = json.loads(raw_content)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(results, list):
+        return
+    for item in results:
+        if not isinstance(item, dict) or "score" not in item:
+            continue
+        if item.get("source_type") == "web":
+            st.info(f"\U0001f310 Web fallback - score {item['score']:.2f} - {item.get('source', '')}")
+        elif item.get("confidence") == "low":
+            st.warning(
+                f"⚠️ Low-confidence internal match - score {item['score']:.2f} - "
+                f"{item.get('title', '')}"
+            )
+        else:
+            st.success(f"\U0001f4c4 Internal doc - score {item['score']:.2f} - {item.get('title', '')}")
+
+
 def render_messages(messages):
     tool_results = {m.tool_call_id: m.content for m in messages if m.type == "tool"}
     for msg in messages:
@@ -62,6 +87,8 @@ def render_messages(messages):
                 if text:
                     st.markdown(text)
                 for tc in msg.tool_calls:
+                    if tc["name"] in ("search_knowledge_base", "search_web"):
+                        _render_retrieval_badges(tool_results.get(tc["id"]))
                     with st.expander(f"\U0001f50d {tc['name']}({tc['args']})"):
                         st.code(tool_results.get(tc["id"], "(pending)"), language="json")
 

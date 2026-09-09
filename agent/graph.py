@@ -20,6 +20,7 @@ from agent.tools import (
     query_invoices,
     rollback,
     search_knowledge_base,
+    search_web,
 )
 
 load_dotenv()
@@ -44,6 +45,7 @@ TOOLS = [
     query_credit_memos,
     fx_convert,
     search_knowledge_base,
+    search_web,
     propose_make_good_invoice,
     propose_credit_memo,
     propose_plan_amendment,
@@ -71,6 +73,13 @@ have context on), call search_knowledge_base for relevant policy or \
 account-specific notes - cite the specific document if it changes your \
 recommendation, e.g. an escalation threshold or an account-specific \
 override.
+- search_knowledge_base results include a similarity score and a \
+confidence label ("high" or "low"). If every result is "low" confidence, \
+or none are returned, for something central to your investigation, don't \
+treat it as reliable - call search_web instead. Always make it clear in \
+your answer whether a finding is grounded in internal policy/notes or a \
+web search result; never present a low-confidence internal match as if it \
+were a solid citation.
 - Before proposing a credit memo, or whenever discussing a possible \
 overbilling issue, call query_credit_memos for the relevant plan_id/invoice_id \
 - if a credit memo already covers it, explain that it's already resolved \

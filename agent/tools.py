@@ -9,6 +9,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from agent.knowledge_base import search as _search_knowledge_base
+from agent.web_search import search as _search_web
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 SANDBOX_DIR = DATA_DIR / "sandbox"
@@ -133,8 +134,21 @@ def search_knowledge_base(query: str, k: int = 3) -> list[dict]:
     thresholds, FX/credit-memo/amendment policy, account-specific handling,
     known issues) for guidance relevant to the current investigation. Always
     cite the specific document (source) if it changes your recommendation -
-    e.g. an escalation threshold or an account-specific override."""
+    e.g. an escalation threshold or an account-specific override. Each
+    result includes a "confidence" label ("high"/"low"); if every result is
+    "low" (or none come back) for something central to your investigation,
+    don't treat it as reliable - call search_web instead."""
     return _search_knowledge_base(query, k=k)
+
+
+@tool
+def search_web(query: str, k: int = 3) -> list[dict]:
+    """Run a real web search (via Tavily) for information the internal
+    knowledge base doesn't cover - use this when search_knowledge_base
+    returns no results or only low-confidence matches for something central
+    to your investigation. Cite these results as external/web sources, never
+    as internal policy."""
+    return _search_web(query, k=k)
 
 
 @tool

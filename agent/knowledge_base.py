@@ -3,6 +3,7 @@
 Embeddings run fully offline via sentence-transformers; the FAISS index is built once, in memory, lazily on first search.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -51,13 +52,24 @@ def _build_index() -> None:
     _index.add(np.asarray(embeddings, dtype="float32"))
 
 
+def _confidence_threshold() -> float:
+    """Read KB_CONFIDENCE_THRESHOLD lazily."""
+    return float(os.environ.get("KB_CONFIDENCE_THRESHOLD", "0.40"))
+
+
 def search(query: str, k: int = 3) -> list[dict]:
-    """Return the top-k most relevant knowledge-base chunks for a query,
-    each with its source file, section title, text, and similarity score."""
+    """Return the top-k most relevant knowledge-base chunks for a query, each
+    with its source file, section title, text, similarity score, and a
+    confidence label ("high"/"low", vs. KB_CONFIDENCE_THRESHOLD) - a "low"
+    label (or an empty result) means this match shouldn't be trusted on its
+    own."""
     if _index is None:
         _build_index()
     query_vec = _model.encode([query], normalize_embeddings=True)
     scores, idxs = _index.search(np.asarray(query_vec, dtype="float32"), min(k, len(_chunks)))
+    threshold = _confidence_threshold()
     return [
-        {**_chunks[i], "score": round(float(score), 4)} for score, i in zip(scores[0], idxs[0]) if i != -1
+        {**_chunks[i], "score": round(float(score), 4), "confidence": "high" if score >= threshold else "low"}
+        for score, i in zip(scores[0], idxs[0])
+        if i != -1
     ]

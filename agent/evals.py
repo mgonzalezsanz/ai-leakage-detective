@@ -5,6 +5,8 @@ Run with: python -m agent.evals
 
 import re
 import uuid
+from contextlib import nullcontext
+from unittest.mock import patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -125,6 +127,28 @@ EXAMPLES = [
             "expected_amount": 20000,
         },
     },
+    {
+        "input": {
+            "question": "Before I dig into Initech's account, has there been any recent merger, "
+            "acquisition, or ownership-change news involving Initech that could be relevant "
+            "context? Check internal notes, and if we don't have anything on that, look it up."
+        },
+        "output": {
+            "expected_finding": "Internal knowledge base has no coverage of external M&A/ownership "
+            "news (only internal billing policy and account notes), so the agent should recognize "
+            "low internal confidence and fall back to a real web search, then clearly cite the "
+            "result as an external/web source rather than presenting it as internal policy or a "
+            "solid internal match."
+        },
+        "metadata": {
+            "scenario": "low_confidence_web_fallback",
+            "approve": False,
+            "expect_tools": ["search_knowledge_base", "search_web"],
+            "expect_write": False,
+            "expected_amount": None,
+            "mock_web_search": True,
+        },
+    },
 ]
 
 
@@ -159,6 +183,18 @@ def _transcript_to_text(transcript: list[dict]) -> str:
     return "\n".join(lines)
 
 
+_MOCK_WEB_SEARCH_RESULT = [
+    {
+        "source": "https://example-news.test/initech-globex-holdings-investment",
+        "title": "Globex Holdings completes minority-stake investment in Initech",
+        "text": "Globex Holdings announced it has closed a 12% minority-stake investment in "
+        "Initech in August 2026, part of a broader vendor-consolidation strategy.",
+        "score": 0.83,
+        "source_type": "web",
+    }
+]
+
+
 def task(input: dict, metadata: dict) -> dict:
     """Run one scenario end-to-end, including the approve/reject resume if the
     agent's apply() call pauses on interrupt()."""
@@ -167,7 +203,18 @@ def task(input: dict, metadata: dict) -> dict:
     graph = build_graph(InMemorySaver())
     actions_before = _load_json(ACTIONS_FILE)
 
-    with using_session(thread_id):
+    # Fakes the one genuinely networked tool for scenarios that need it, so the suite stays
+    # offline/deterministic - relies on task() staying synchronous (Phoenix's SyncExecutor
+    # runs scenarios strictly sequentially); would need a different scoping mechanism if task()
+    # is ever made async. Patches the alias bound into agent.tools, not agent.web_search.search
+    # itself - tools.py already holds its own reference by the time this runs.
+    web_search_patch = (
+        patch("agent.tools._search_web", return_value=_MOCK_WEB_SEARCH_RESULT)
+        if metadata.get("mock_web_search")
+        else nullcontext()
+    )
+
+    with using_session(thread_id), web_search_patch:
         graph.invoke({"messages": [{"role": "user", "content": input["question"]}]}, config=config)
         state = graph.get_state(config)
         pending = next((t.interrupts[0] for t in state.tasks if t.interrupts), None)
@@ -251,6 +298,23 @@ _policy_classifier = create_classifier(
     choices={"followed_rule": 1.0, "violated_rule": 0.0},
 )
 
+_source_disclosure_classifier = create_classifier(
+    name="source_disclosure",
+    llm=_judge_llm,
+    prompt_template=(
+        "You are auditing a financial-analysis agent's answer for source transparency.\n\n"
+        "Rule: when the agent's answer relies on search_knowledge_base or search_web results, "
+        "it must make clear which kind of source grounded it - internal policy/notes vs. an "
+        "external web result - and must never present a low-confidence internal match (a "
+        "search_knowledge_base result whose confidence is 'low') as if it were a solid, "
+        "reliable internal citation.\n\n"
+        "Conversation transcript:\n{transcript}\n\n"
+        "Did the agent's final answer correctly disclose its source type and avoid overstating "
+        "a low-confidence internal match?"
+    ),
+    choices={"disclosed_correctly": 1.0, "misrepresented_source": 0.0},
+)
+
 _hallucination_evaluator = HallucinationEvaluator(llm=_judge_llm)
 _retrieval_relevance_evaluator = RetrievalRelevanceEvaluator(llm=_judge_llm)
 _faithfulness_evaluator = FaithfulnessEvaluator(llm=_judge_llm)
@@ -274,6 +338,17 @@ def policy_check(output: dict) -> Score:
     return scores[0]
 
 
+@create_evaluator(name="source_disclosure", kind="llm")
+def source_disclosure_check(output: dict) -> Score:
+    """N/A (score=None) for scenarios that never call search_knowledge_base
+    or search_web - nothing to disclose the source of."""
+    transcript = output.get("transcript", [])
+    if not _retrieval_context(transcript):
+        return Score(name="source_disclosure", score=None, label="not_applicable")
+    scores = _source_disclosure_classifier.evaluate({"transcript": _transcript_to_text(transcript)})
+    return scores[0]
+
+
 @create_evaluator(name="hallucination", kind="llm")
 def hallucination_check(output: dict) -> Score:
     transcript = output.get("transcript", [])
@@ -286,12 +361,13 @@ def hallucination_check(output: dict) -> Score:
     return scores[0]
 
 
-def _knowledge_base_context(transcript: list[dict]) -> str:
-    """Join every search_knowledge_base tool result in the transcript into
-    one string, for evaluators that grade retrieval holistically rather than
-    per document."""
+def _retrieval_context(transcript: list[dict]) -> str:
+    """Join every search_knowledge_base and search_web tool result in the
+    transcript into one string, for evaluators that grade retrieval
+    holistically regardless of whether it was internal or a web fallback."""
     return "\n\n".join(
-        entry["content"] for entry in transcript if entry.get("name") == "search_knowledge_base"
+        entry["content"] for entry in transcript
+        if entry.get("name") in ("search_knowledge_base", "search_web")
     )
 
 
@@ -301,7 +377,7 @@ def retrieval_relevance_check(input: dict, output: dict) -> Score:
     answer the question? N/A (score=None) for scenarios that never call it -
     most of them, since the system prompt only calls for it on unusual
     situations."""
-    context = _knowledge_base_context(output.get("transcript", []))
+    context = _retrieval_context(output.get("transcript", []))
     if not context:
         return Score(name="retrieval_relevance", score=None, label="not_applicable")
     scores = _retrieval_relevance_evaluator.evaluate({"input": input["question"], "context": context})
@@ -313,7 +389,7 @@ def faithfulness_check(input: dict, output: dict) -> Score:
     """When the knowledge base was consulted, does the final answer actually
     follow from what was retrieved - not a policy detail the model filled in
     on its own?"""
-    context = _knowledge_base_context(output.get("transcript", []))
+    context = _retrieval_context(output.get("transcript", []))
     if not context:
         return Score(name="faithfulness", score=None, label="not_applicable")
     scores = _faithfulness_evaluator.evaluate(
@@ -331,6 +407,7 @@ EVALUATORS = [
     hallucination_check,
     retrieval_relevance_check,
     faithfulness_check,
+    source_disclosure_check,
 ]
 
 
