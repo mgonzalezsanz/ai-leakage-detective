@@ -81,7 +81,7 @@ flowchart TD
     Tools --> Rollback["rollback()"]
 
     ReadOnly --> Fixtures[("data/*.json<br/>billing plans, invoices,<br/>credit memos, exchange rates")]
-    RAG --> KB["agent/knowledge_base.py<br/>MiniLM embeddings + FAISS index"]
+    RAG --> KB["agent/knowledge_base.py<br/>MiniLM embeddings + FAISS,<br/>then Cohere rerank"]
     KB --> KBDocs[("data/knowledge_base/*.md<br/>policy docs, account notes")]
     RAG -.->|"low confidence"| Web
     Web --> WebSearch["agent/web_search.py"]
@@ -98,7 +98,8 @@ flowchart TD
 
 - [`agent/tools.py`](agent/tools.py) — read-only lookups (`load_plan`, `query_invoices`, `query_credit_memos`, `fx_convert`) and side-effect-free `propose_*` drafting tools; `apply_impl`/`rollback` are the only functions that touch the sandbox ledger.
 - [`agent/graph.py`](agent/graph.py) — compiles a LangGraph `create_react_agent` over those tools, plus a wrapped `apply()` tool that calls `interrupt()` before writing anything, so the graph pauses until a human resumes with `"approve"` or `"reject"`.
-- [`agent/knowledge_base.py`](agent/knowledge_base.py) — a small local RAG layer: sentence-transformer embeddings + a FAISS index over `data/knowledge_base`, searched via the `search_knowledge_base` tool. Each result carries a similarity score and a `confidence` label ("high"/"low", vs. a configurable threshold).
+- [`agent/knowledge_base.py`](agent/knowledge_base.py) — a small local RAG layer: sentence-transformer embeddings + a FAISS index over `data/knowledge_base`, searched via the `search_knowledge_base` tool. Each result carries a relevance score (see [`agent/reranker.py`](agent/reranker.py)) and a `confidence` label ("high"/"low", vs. a configurable threshold).
+- [`agent/reranker.py`](agent/reranker.py) — re-scores the FAISS candidate pool for true relevance via the Cohere Rerank API (a plain `httpx` call, no SDK) before the confidence threshold is applied; degrades to the raw FAISS similarity ranking if `COHERE_API_KEY` is unset or the call fails.
 - [`agent/web_search.py`](agent/web_search.py) — a real web search fallback via the Tavily API (a plain `httpx` call, no SDK), used via the `search_web` tool when internal retrieval comes back low-confidence or empty.
 - [`agent/observability.py`](agent/observability.py) — wires OpenTelemetry tracing to a local Arize Phoenix collector and auto-instruments every LLM call and tool invocation.
 - [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: eight scenarios run end-to-end through the real agent, graded by nine evaluators (three deterministic, six LLM-judged, including RAG-specific retrieval-relevance/faithfulness checks and a source-disclosure check for the web-fallback path).
@@ -123,7 +124,7 @@ flowchart TD
 | `query_invoices(...)` | Filter invoices by plan, customer, date range |
 | `query_credit_memos(...)` | Filter existing credit memos |
 | `fx_convert(amount, from_ccy, to_ccy, on_date)` | Currency conversion using dated FX rates |
-| `search_knowledge_base(query, k=3)` | Semantic search over internal policy docs and account notes (RAG, local embeddings); each result includes a similarity score and a confidence label |
+| `search_knowledge_base(query, k=3)` | Semantic search over internal policy docs and account notes (RAG, local embeddings + Cohere rerank); each result includes a relevance score and a confidence label |
 | `search_web(query, k=3)` | Real web search fallback (Tavily) for when internal retrieval is low-confidence or empty |
 | `propose_make_good_invoice(...)` | Draft a new invoice (no write) |
 | `propose_credit_memo(...)` | Draft a credit memo (no write) |
@@ -155,7 +156,7 @@ cp .env.example .env   # add your ANTHROPIC_API_KEY
 
 The first call to `search_knowledge_base` downloads its embedding model (`all-MiniLM-L6-v2`, ~90MB, one-time, cached locally afterward) — the first investigation in a fresh clone will be slower than the rest.
 
-`search_web` needs a [Tavily](https://tavily.com) API key (`TAVILY_API_KEY` in `.env`) to actually reach the web — without one it degrades gracefully to an `{"error": ...}` result instead of crashing. `KB_CONFIDENCE_THRESHOLD` (default `0.40`) controls how low a similarity score has to be before the agent is told to stop trusting an internal match and fall back to `search_web`.
+`search_knowledge_base` re-scores its results for relevance via the [Cohere](https://cohere.com) Rerank API when `COHERE_API_KEY` is set in `.env`; without one it falls back to the raw FAISS cosine-similarity ranking. `search_web` needs a [Tavily](https://tavily.com) API key (`TAVILY_API_KEY` in `.env`) to actually reach the web — without one it degrades gracefully to an `{"error": ...}` result instead of crashing. `KB_CONFIDENCE_THRESHOLD` (default `0.40`) controls how low a result's relevance score has to be before the agent is told to stop trusting an internal match and fall back to `search_web`.
 
 Start Phoenix in its own terminal (tracing/evals no-op silently if it isn't running):
 
@@ -195,6 +196,7 @@ agent/
   tools.py             # read-only lookups, propose_* drafting tools, apply/rollback
   graph.py             # LangGraph ReAct agent + interrupt()-gated apply()
   knowledge_base.py    # local RAG: sentence-transformer embeddings + FAISS
+  reranker.py          # Cohere Rerank re-scoring of KB candidates (httpx, no SDK)
   web_search.py        # Tavily web search fallback (httpx, no SDK)
   observability.py     # Phoenix/OTel tracing setup
   evals.py             # Phoenix dataset + experiment harness

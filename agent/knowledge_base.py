@@ -11,6 +11,8 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from agent.reranker import rerank
+
 KB_DIR = Path(__file__).parent.parent / "data" / "knowledge_base"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
@@ -59,17 +61,36 @@ def _confidence_threshold() -> float:
 
 def search(query: str, k: int = 3) -> list[dict]:
     """Return the top-k most relevant knowledge-base chunks for a query, each
-    with its source file, section title, text, similarity score, and a
+    with its source file, section title, text, a relevance score, and a
     confidence label ("high"/"low", vs. KB_CONFIDENCE_THRESHOLD) - a "low"
     label (or an empty result) means this match shouldn't be trusted on its
-    own."""
+    own.
+
+    Retrieves a wider candidate pool via FAISS cosine similarity, then
+    reranks it via Cohere for actual relevance to the query
+    - similarity alone tracks vocabulary overlap, not "does this actually answer 
+    the question". Falls back to the raw FAISS similarity ranking, unchanged, if 
+    reranking is unavailable or fails - a missing/broken reranker degrades retrieval 
+    quality, it never breaks it.
+    """
     if _index is None:
         _build_index()
     query_vec = _model.encode([query], normalize_embeddings=True)
-    scores, idxs = _index.search(np.asarray(query_vec, dtype="float32"), min(k, len(_chunks)))
+    pool_size = min(len(_chunks), max(k * 4, 8))
+    pool_scores, idxs = _index.search(np.asarray(query_vec, dtype="float32"), pool_size)
+    candidates = [
+        {**_chunks[i], "score": round(float(score), 4)}
+        for score, i in zip(pool_scores[0], idxs[0])
+        if i != -1
+    ]
+
+    rerank_scores = rerank(query, [c["text"] for c in candidates])
+    if rerank_scores is not None:
+        for c, r in zip(candidates, rerank_scores):
+            c["score"] = round(float(r), 4)
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+
     threshold = _confidence_threshold()
     return [
-        {**_chunks[i], "score": round(float(score), 4), "confidence": "high" if score >= threshold else "low"}
-        for score, i in zip(scores[0], idxs[0])
-        if i != -1
+        {**c, "confidence": "high" if c["score"] >= threshold else "low"} for c in candidates[:k]
     ]

@@ -2,6 +2,10 @@
 Run with: python -m agent.checks
 """
 
+import os
+from unittest.mock import patch
+
+from agent.reranker import rerank
 from agent.tools import (
     apply_impl,
     fx_convert,
@@ -9,6 +13,19 @@ from agent.tools import (
     propose_make_good_invoice,
     rollback,
 )
+
+
+def check_reranker_graceful_degradation():
+    """No live Cohere call here - just the deterministic "don't crash, don't
+    lie about being reranked" behavior: missing key or nothing to rerank both
+    return None, not an empty/zeroed score list a caller could mistake for a
+    real (if uniformly bad) result."""
+    assert rerank("anything", []) is None, "no documents to rerank should return None, not []"
+
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("COHERE_API_KEY", None)
+        result = rerank("test query", ["doc one", "doc two"])
+    assert result is None, result
 
 
 def check_amendment_chain():
@@ -61,4 +78,5 @@ if __name__ == "__main__":
     check_amendment_chain()
     check_fx_convert()
     check_apply_rollback_roundtrip()
+    check_reranker_graceful_degradation()
     print("OK")
