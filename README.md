@@ -102,7 +102,10 @@ flowchart TD
 - [`agent/reranker.py`](agent/reranker.py) — re-scores the FAISS candidate pool for true relevance via the Cohere Rerank API (a plain `httpx` call, no SDK) before the confidence threshold is applied; degrades to the raw FAISS similarity ranking if `COHERE_API_KEY` is unset or the call fails.
 - [`agent/web_search.py`](agent/web_search.py) — a real web search fallback via the Tavily API (a plain `httpx` call, no SDK), used via the `search_web` tool when internal retrieval comes back low-confidence or empty.
 - [`agent/observability.py`](agent/observability.py) — wires OpenTelemetry tracing to a local Arize Phoenix collector and auto-instruments every LLM call and tool invocation.
-- [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: eight scenarios run end-to-end through the real agent, graded by nine evaluators (three deterministic, six LLM-judged, including RAG-specific retrieval-relevance/faithfulness checks and a source-disclosure check for the web-fallback path).
+- [`agent/eval_scenarios.py`](agent/eval_scenarios.py) — the eight eval scenarios (pure data), shared by `agent/evals.py`, `tests/test_rag_quality.py`, and `agent/checks.py`.
+- [`agent/eval_runner.py`](agent/eval_runner.py) — runs one scenario end-to-end through the real agent and returns its transcript/answer/retrieved contexts; shared by `agent/evals.py` and `tests/test_rag_quality.py` so the agent-invocation logic isn't duplicated between them.
+- [`agent/evals.py`](agent/evals.py) — a Phoenix dataset + experiment harness: the eight scenarios run end-to-end through the real agent, graded by thirteen evaluators (three deterministic, six Phoenix LLM-judged — including RAG-specific retrieval-relevance/faithfulness checks and a source-disclosure check for the web-fallback path — plus four RAGAS metrics, see below).
+- [`tests/test_rag_quality.py`](tests/test_rag_quality.py) — a DeepEval pytest suite with explicit pass/fail thresholds on the RAG-specific scenarios; the CI gate counterpart to the exploratory scoring above.
 - [`ui/`](ui/) — a FastAPI + Jinja2 + [htmx](https://htmx.org) chat UI on top of the same compiled graph: a background thread runs each turn while the browser polls for updates, an approve/reject card handles pending actions, a slide-over panel shows the live audit log, and colored badges surface each retrieval result's confidence/source type.
 
 ## Data (`/data`)
@@ -142,6 +145,13 @@ On top of that, [`agent/evals.py`](agent/evals.py) defines a small regression su
 - **LLM-judged checks** — the answer matches the expected finding, the agent never called `apply()` without explicit confirmation, it didn't hallucinate facts not in the data, retrieved content (internal or web) was actually relevant and the answer stayed faithful to it, and — whenever retrieval was used — the answer correctly disclosed whether it was grounded in internal policy or a web result
 
 See the [blog post](https://killosmind.com/2026/08/27/ai-agent-observability-evaluation-arize-phoenix/) for a full walkthrough of how this is wired up and why.
+
+### Why three eval frameworks, not one
+
+- **Phoenix** (`agent/evals.py`) — the full-trace regression suite described above: every scenario's complete agent trajectory (tool calls, sandbox writes, the interrupt/approval flow) graded end-to-end, deterministic + LLM-judged. This is the one to open the Phoenix UI for when something looks wrong.
+- **RAGAS** (also inside `agent/evals.py`, same experiment run) — adds `ragas_faithfulness`, `ragas_answer_relevancy`, `ragas_context_precision`, and `ragas_context_recall` as four more evaluator columns on the same dashboard. RAGAS's faithfulness metric uses a different methodology than Phoenix's built-in one (claim decomposition + per-claim verification against context, rather than a single classification prompt) — running both is a deliberate cross-check, not duplication; the other three have no existing counterpart in this harness. Exploratory scoring for spotting retrieval-quality drift over time, not a gate.
+- **DeepEval** (`tests/test_rag_quality.py`) — the one meant to fail a build: explicit pass/fail thresholds on just the scenarios that actually exercise `search_knowledge_base`/`search_web`, run via `pytest tests/` or `deepeval test run tests/test_rag_quality.py`. Distinct in purpose from the two above — this is the CI gate, they're the dashboard.
+- All three (plus `agent/checks.py`) share one source of truth for scenario data ([`agent/eval_scenarios.py`](agent/eval_scenarios.py)) and one agent-invocation helper ([`agent/eval_runner.py`](agent/eval_runner.py)) — no scenario is defined twice.
 
 ## Getting started
 
@@ -183,10 +193,16 @@ python -m agent.checks
 python -m ui.checks
 ```
 
-Run the full Phoenix eval suite (requires Phoenix running):
+Run the full Phoenix + RAGAS eval suite (requires Phoenix running):
 
 ```bash
 python -m agent.evals
+```
+
+Run the DeepEval RAG-quality CI gate (explicit pass/fail thresholds, no Phoenix required):
+
+```bash
+pytest tests/                          # or: deepeval test run tests/test_rag_quality.py
 ```
 
 ## Project structure
@@ -199,7 +215,9 @@ agent/
   reranker.py          # Cohere Rerank re-scoring of KB candidates (httpx, no SDK)
   web_search.py        # Tavily web search fallback (httpx, no SDK)
   observability.py     # Phoenix/OTel tracing setup
-  evals.py             # Phoenix dataset + experiment harness
+  eval_scenarios.py    # shared eval scenario fixtures (pure data)
+  eval_runner.py       # shared agent-invocation helper for evals
+  evals.py             # Phoenix + RAGAS dataset/experiment harness
   checks.py            # plain assert-based unit checks
 ui/
   app.py                # FastAPI app: routes, background-thread turn execution
@@ -207,6 +225,8 @@ ui/
   checks.py             # plain assert-based unit checks for rendering.py
   templates/             # Jinja2 + htmx chat UI
   static/                 # style.css
+tests/
+  test_rag_quality.py    # DeepEval RAG-quality CI gate
 data/                     # fixture data + writable sandbox ledger
 langgraph.json            # LangGraph Studio config
 ```

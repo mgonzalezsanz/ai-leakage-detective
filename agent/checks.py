@@ -5,6 +5,7 @@ Run with: python -m agent.checks
 import os
 from unittest.mock import patch
 
+from agent.eval_scenarios import EXAMPLES
 from agent.reranker import rerank
 from agent.tools import (
     apply_impl,
@@ -74,9 +75,21 @@ def check_apply_rollback_roundtrip():
     ), audit_log
 
 
+def check_eval_scenarios_well_formed():
+    """Structural validation of the shared scenario fixtures (agent/eval_scenarios.py)
+    consumed by agent/evals.py and tests/test_rag_quality.py"""
+    scenario_ids = [e["metadata"]["scenario"] for e in EXAMPLES]
+    assert len(scenario_ids) == len(set(scenario_ids)), scenario_ids
+
+    for e in EXAMPLES:
+        assert "question" in e["input"], e
+        assert "expected_finding" in e["output"], e
+
+
 if __name__ == "__main__":
     check_amendment_chain()
     check_fx_convert()
     check_apply_rollback_roundtrip()
     check_reranker_graceful_degradation()
+    check_eval_scenarios_well_formed()
     print("OK")

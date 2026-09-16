@@ -5,6 +5,7 @@ Embeddings run fully offline via sentence-transformers; the FAISS index is built
 
 import os
 import re
+import threading
 from pathlib import Path
 
 import faiss
@@ -18,10 +19,15 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Lazy singleton: stay None/empty until the first search() call, then built once and kept resident in 
 # memory for the life of this process - no reload, no explicit unload.
-# Each process (Streamlit, langgraph dev, a python -m agent.evals run) holds its own copy.
+# Each process (UI, langgraph dev, a python -m agent.evals run) holds its own copy.
+# _build_lock guards the build: callers (e.g. Phoenix's experiment runner, which invokes the agent
+# concurrently across several threads) can hit search() before the index exists, and racing multiple
+# uninitialized SentenceTransformer/faiss builds against these same globals corrupts native state
+# (observed as a segfault, or a hang inside tokenizers) rather than failing cleanly.
 _model: SentenceTransformer | None = None
 _index: faiss.Index | None = None
 _chunks: list[dict] = []
+_build_lock = threading.Lock()
 
 
 def _split_into_chunks(path: Path) -> list[dict]:
@@ -74,7 +80,9 @@ def search(query: str, k: int = 3) -> list[dict]:
     quality, it never breaks it.
     """
     if _index is None:
-        _build_index()
+        with _build_lock:
+            if _index is None:
+                _build_index()
     query_vec = _model.encode([query], normalize_embeddings=True)
     pool_size = min(len(_chunks), max(k * 4, 8))
     pool_scores, idxs = _index.search(np.asarray(query_vec, dtype="float32"), pool_size)

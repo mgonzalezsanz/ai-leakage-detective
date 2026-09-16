@@ -3,234 +3,24 @@ Requires `phoenix serve` running locally.
 Run with: python -m agent.evals
 """
 
+import asyncio
 import re
-import uuid
-from contextlib import nullcontext
-from unittest.mock import patch
 
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
+from anthropic import AsyncAnthropic
 from phoenix.client import Client
 from phoenix.evals import LLM, Score, create_classifier, create_evaluator
 from phoenix.evals.metrics import FaithfulnessEvaluator, HallucinationEvaluator, RetrievalRelevanceEvaluator
-from phoenix.otel import using_session
 
-from agent.graph import build_graph
-from agent.tools import ACTIONS_FILE, _load_json
+from agent import _ragas_compat  # noqa: F401  (must precede any ragas import - see module docstring)
+from ragas.embeddings import HuggingFaceEmbeddings
+from ragas.llms import llm_factory
+from ragas.metrics.collections import AnswerRelevancy, ContextPrecision, ContextRecall, Faithfulness
+
+from agent.eval_runner import _retrieval_context, _transcript_to_text, retrieved_contexts, run_scenario
+from agent.eval_scenarios import EXAMPLES
+from agent.knowledge_base import EMBEDDING_MODEL
 
 DATASET_NAME = "revenue-leakage-scenarios"
-
-EXAMPLES = [
-    {
-        "input": {"question": "Investigate plan C-1001 and tell me if there's a billing discrepancy."},
-        "output": {"expected_finding": "Missing September invoice; $8,000 underbilled for that month."},
-        "metadata": {
-            "scenario": "missing_invoice",
-            "approve": False,
-            "expect_tools": ["load_plan", "query_invoices"],
-            "expect_write": False,
-            "expected_amount": 8000,
-        },
-    },
-    {
-        "input": {"question": "Is there anything wrong with invoice I-9123 on plan C-1007-A1?"},
-        "output": {
-            "expected_finding": "Already resolved by credit memo M-300 ($2,000 FX overbilling "
-            "adjustment, EUR->USD); should not propose a new fix."
-        },
-        "metadata": {
-            "scenario": "already_resolved",
-            "approve": False,
-            "expect_tools": ["query_credit_memos"],
-            "expect_write": False,
-            "expected_amount": 2000,
-        },
-    },
-    {
-        "input": {"question": "What can you tell me about invoice I-9202?"},
-        "output": {
-            "expected_finding": "Orphan invoice with no plan_id - should be flagged as "
-            "unlinked/a risk, not attributed to a fabricated plan."
-        },
-        "metadata": {
-            "scenario": "orphan_invoice",
-            "approve": False,
-            "expect_tools": ["query_invoices"],
-            "expect_write": False,
-            "expected_amount": None,
-        },
-    },
-    {
-        "input": {"question": "What changed with plan C-1007?"},
-        "output": {
-            "expected_finding": "Amended by C-1007-A1: total value went from $90,000 to "
-            "$100,000, effective 2025-07-01."
-        },
-        "metadata": {
-            "scenario": "amendment_chain",
-            "approve": False,
-            "expect_tools": ["load_plan"],
-            "expect_write": False,
-            "expected_amount": None,
-        },
-    },
-    {
-        "input": {
-            "question": "Investigate plan C-1010 for underbilling. If you find a discrepancy, "
-            "propose a make-good invoice - I approve any proposal you make, so go ahead and "
-            "apply it once you've proposed it."
-        },
-        "output": {"expected_finding": "$20,000 underbilled ($120,000 annual plan vs. $100,000 invoiced)."},
-        "metadata": {
-            "scenario": "underbilling_approve",
-            "approve": True,
-            "expect_tools": ["load_plan", "query_invoices", "propose_make_good_invoice"],
-            "expect_write": True,
-            "expected_amount": 20000,
-            "expected_plan_id": "C-1010",
-        },
-    },
-    {
-        "input": {
-            "question": "Investigate plan C-1010 for underbilling. If you find a discrepancy, "
-            "propose a fix - but note I will reject any apply request, so don't assume approval."
-        },
-        "output": {
-            "expected_finding": "$20,000 underbilled ($120,000 annual plan vs. $100,000 "
-            "invoiced); nothing should be written to the sandbox since the fix is rejected."
-        },
-        "metadata": {
-            "scenario": "underbilling_reject",
-            "approve": False,
-            "expect_tools": ["load_plan", "query_invoices", "propose_make_good_invoice"],
-            "expect_write": False,
-            "expected_amount": 20000,
-            "expected_plan_id": "C-1010",
-        },
-    },
-    {
-        "input": {
-            "question": "Investigate plan C-1010 for underbilling and tell me if there's "
-            "anything else I should know before proposing a fix."
-        },
-        "output": {
-            "expected_finding": "$20,000 underbilled ($120,000 annual plan vs. $100,000 "
-            "invoiced); Initech has an account-specific escalation threshold of $10,000 "
-            "(lower than the standard $15,000), so the account manager should be looped in "
-            "before applying any correction."
-        },
-        "metadata": {
-            "scenario": "policy_aware_escalation",
-            "approve": False,
-            "expect_tools": ["load_plan", "query_invoices", "search_knowledge_base"],
-            "expect_write": False,
-            "expected_amount": 20000,
-        },
-    },
-    {
-        "input": {
-            "question": "Before I dig into Initech's account, has there been any recent merger, "
-            "acquisition, or ownership-change news involving Initech that could be relevant "
-            "context? Check internal notes, and if we don't have anything on that, look it up."
-        },
-        "output": {
-            "expected_finding": "Internal knowledge base has no coverage of external M&A/ownership "
-            "news (only internal billing policy and account notes), so the agent should recognize "
-            "low internal confidence and fall back to a real web search, then clearly cite the "
-            "result as an external/web source rather than presenting it as internal policy or a "
-            "solid internal match."
-        },
-        "metadata": {
-            "scenario": "low_confidence_web_fallback",
-            "approve": False,
-            "expect_tools": ["search_knowledge_base", "search_web"],
-            "expect_write": False,
-            "expected_amount": None,
-            "mock_web_search": True,
-        },
-    },
-]
-
-
-def _serialize_messages(messages: list) -> list[dict]:
-    transcript = []
-    for m in messages:
-        content = m.content if isinstance(m.content, str) else "".join(
-            b.get("text", "") for b in m.content if isinstance(b, dict)
-        )
-        entry = {"type": m.type, "content": content}
-        if getattr(m, "tool_calls", None):
-            entry["tool_calls"] = [{"name": tc["name"], "args": tc["args"]} for tc in m.tool_calls]
-        if m.type == "tool":
-            entry["name"] = getattr(m, "name", None)
-        transcript.append(entry)
-    return transcript
-
-
-def _transcript_to_text(transcript: list[dict]) -> str:
-    lines = []
-    for entry in transcript:
-        if entry["type"] == "human":
-            lines.append(f"User: {entry['content']}")
-        elif entry["type"] == "ai":
-            if entry.get("tool_calls"):
-                calls = "; ".join(f"{tc['name']}({tc['args']})" for tc in entry["tool_calls"])
-                lines.append(f"Assistant tool calls: {calls}")
-            if entry["content"]:
-                lines.append(f"Assistant: {entry['content']}")
-        elif entry["type"] == "tool":
-            lines.append(f"Tool result ({entry.get('name')}): {entry['content']}")
-    return "\n".join(lines)
-
-
-_MOCK_WEB_SEARCH_RESULT = [
-    {
-        "source": "https://example-news.test/initech-globex-holdings-investment",
-        "title": "Globex Holdings completes minority-stake investment in Initech",
-        "text": "Globex Holdings announced it has closed a 12% minority-stake investment in "
-        "Initech in August 2026, part of a broader vendor-consolidation strategy.",
-        "score": 0.83,
-        "source_type": "web",
-    }
-]
-
-
-def task(input: dict, metadata: dict) -> dict:
-    """Run one scenario end-to-end, including the approve/reject resume if the
-    agent's apply() call pauses on interrupt()."""
-    thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    graph = build_graph(InMemorySaver())
-    actions_before = _load_json(ACTIONS_FILE)
-
-    # Fakes the one genuinely networked tool for scenarios that need it, so the suite stays
-    # offline/deterministic - relies on task() staying synchronous (Phoenix's SyncExecutor
-    # runs scenarios strictly sequentially); would need a different scoping mechanism if task()
-    # is ever made async. Patches the alias bound into agent.tools, not agent.web_search.search
-    # itself - tools.py already holds its own reference by the time this runs.
-    web_search_patch = (
-        patch("agent.tools._search_web", return_value=_MOCK_WEB_SEARCH_RESULT)
-        if metadata.get("mock_web_search")
-        else nullcontext()
-    )
-
-    with using_session(thread_id), web_search_patch:
-        graph.invoke({"messages": [{"role": "user", "content": input["question"]}]}, config=config)
-        state = graph.get_state(config)
-        pending = next((t.interrupts[0] for t in state.tasks if t.interrupts), None)
-        if pending is not None:
-            graph.invoke(Command(resume="approve" if metadata.get("approve") else "reject"), config=config)
-
-    state = graph.get_state(config)
-    transcript = _serialize_messages(state.values["messages"])
-    actions_after = _load_json(ACTIONS_FILE)
-
-    return {
-        "answer": transcript[-1]["content"] if transcript else "",
-        "tool_calls": [tc["name"] for entry in transcript for tc in entry.get("tool_calls", [])],
-        "transcript": transcript,
-        "new_applied_actions": actions_after[len(actions_before):],
-    }
 
 
 @create_evaluator(name="tool_sequence", kind="code")
@@ -361,16 +151,6 @@ def hallucination_check(output: dict) -> Score:
     return scores[0]
 
 
-def _retrieval_context(transcript: list[dict]) -> str:
-    """Join every search_knowledge_base and search_web tool result in the
-    transcript into one string, for evaluators that grade retrieval
-    holistically regardless of whether it was internal or a web fallback."""
-    return "\n\n".join(
-        entry["content"] for entry in transcript
-        if entry.get("name") in ("search_knowledge_base", "search_web")
-    )
-
-
 @create_evaluator(name="retrieval_relevance", kind="llm")
 def retrieval_relevance_check(input: dict, output: dict) -> Score:
     """Did search_knowledge_base retrieve anything that actually helps
@@ -398,6 +178,74 @@ def faithfulness_check(input: dict, output: dict) -> Score:
     return scores[0]
 
 
+# RAGAS metrics Additive to the Phoenix evaluators above
+# claim-decomposition methodology is a different grading approach than
+# Phoenix's single-prompt judges. Scored into the same experiment run so
+# they show up on the same Phoenix dashboard
+
+_ragas_llm = llm_factory(
+    "claude-haiku-4-5-20251001", provider="anthropic", client=AsyncAnthropic(),
+    max_tokens=4096,
+)
+# ragas's InstructorModelArgs always defaults in both temperature and top_p, and its Anthropic
+# param-mapping is pass-through - claude-haiku-4-5 rejects requests that set both. Drop top_p, since there's no kwarg
+# that removes a default key rather than overwriting its value.
+_ragas_llm.model_args.pop("top_p", None)
+# Reuses the KB's own embedding model - already downloaded/cached locally
+_ragas_embeddings = HuggingFaceEmbeddings(model=EMBEDDING_MODEL)
+_ragas_faithfulness = Faithfulness(llm=_ragas_llm)
+_ragas_answer_relevancy = AnswerRelevancy(llm=_ragas_llm, embeddings=_ragas_embeddings)
+_ragas_context_precision = ContextPrecision(llm=_ragas_llm)
+_ragas_context_recall = ContextRecall(llm=_ragas_llm)
+
+
+@create_evaluator(name="ragas_faithfulness", kind="llm")
+def ragas_faithfulness_check(input: dict, output: dict) -> Score:
+    contexts = retrieved_contexts(output.get("transcript", []))
+    if not contexts:
+        return Score(name="ragas_faithfulness", score=None, label="not_applicable")
+    result = asyncio.run(_ragas_faithfulness.ascore(
+        user_input=input["question"], response=output.get("answer", ""), retrieved_contexts=contexts,
+    ))
+    return Score(name="ragas_faithfulness", score=result.value, explanation=result.reason)
+
+
+@create_evaluator(name="ragas_answer_relevancy", kind="llm")
+def ragas_answer_relevancy_check(input: dict, output: dict) -> Score:
+    """Scoped to the RAG scenarios (N/A when nothing was retrieved) even
+    though this metric doesn't itself need context, so it stays a measure of
+    retrieval-grounded answer quality rather than every scenario's phrasing."""
+    contexts = retrieved_contexts(output.get("transcript", []))
+    if not contexts:
+        return Score(name="ragas_answer_relevancy", score=None, label="not_applicable")
+    result = asyncio.run(_ragas_answer_relevancy.ascore(
+        user_input=input["question"], response=output.get("answer", ""),
+    ))
+    return Score(name="ragas_answer_relevancy", score=result.value, explanation=result.reason)
+
+
+@create_evaluator(name="ragas_context_precision", kind="llm")
+def ragas_context_precision_check(input: dict, output: dict, expected: dict) -> Score:
+    contexts = retrieved_contexts(output.get("transcript", []))
+    if not contexts:
+        return Score(name="ragas_context_precision", score=None, label="not_applicable")
+    result = asyncio.run(_ragas_context_precision.ascore(
+        user_input=input["question"], reference=expected["expected_finding"], retrieved_contexts=contexts,
+    ))
+    return Score(name="ragas_context_precision", score=result.value, explanation=result.reason)
+
+
+@create_evaluator(name="ragas_context_recall", kind="llm")
+def ragas_context_recall_check(input: dict, output: dict, expected: dict) -> Score:
+    contexts = retrieved_contexts(output.get("transcript", []))
+    if not contexts:
+        return Score(name="ragas_context_recall", score=None, label="not_applicable")
+    result = asyncio.run(_ragas_context_recall.ascore(
+        user_input=input["question"], retrieved_contexts=contexts, reference=expected["expected_finding"],
+    ))
+    return Score(name="ragas_context_recall", score=result.value, explanation=result.reason)
+
+
 EVALUATORS = [
     tool_sequence_check,
     arithmetic_citation_check,
@@ -408,6 +256,10 @@ EVALUATORS = [
     retrieval_relevance_check,
     faithfulness_check,
     source_disclosure_check,
+    ragas_faithfulness_check,
+    ragas_answer_relevancy_check,
+    ragas_context_precision_check,
+    ragas_context_recall_check,
 ]
 
 
@@ -447,7 +299,7 @@ def main() -> None:
     dataset = get_or_create_dataset()
     client.experiments.run_experiment(
         dataset=dataset,
-        task=task,
+        task=run_scenario,
         evaluators=EVALUATORS,
         experiment_name="revenue-leakage-regression",
     )
